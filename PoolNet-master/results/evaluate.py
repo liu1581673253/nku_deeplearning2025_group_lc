@@ -44,8 +44,8 @@ def calculate_metrics(pred_dir, gt_dir):
     return avg_max_f, avg_mae
 
 # 设置路径
-pred_dir = 'DUTS-TE-Mask'
-gt_dir = 'RGB_VST'
+pred_dir = 'run-1-sal-e'
+gt_dir = 'mask'
 
 # 执行评测
 avg_max_f, avg_mae = calculate_metrics(pred_dir, gt_dir)
