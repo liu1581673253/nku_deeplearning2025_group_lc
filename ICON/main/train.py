@@ -34,6 +34,22 @@ def structure_loss(pred, mask):
     wiou = 1 - (inter + 1) / (union - inter + 1)
     return (wbce + wiou).mean()
 
+# 计算MAE
+def calculate_mae(pred, gt):
+    return torch.mean(torch.abs(pred - gt)).item()
+
+# 计算F-measure
+def calculate_fmeasure(pred, gt, beta_squared=0.3):
+    eps = 1e-8
+    pred_bin = (pred >= 0.5).float()
+    tp = (pred_bin * gt).sum()
+    fp = pred_bin.sum() - tp
+    fn = gt.sum() - tp
+    precision = tp / (tp + fp + eps)
+    recall = tp / (tp + fn + eps)
+    fmeasure = (1 + beta_squared) * precision * recall / (beta_squared * precision + recall + eps)
+    return fmeasure.item()
+
 # 主训练函数
 def train(Dataset, parser):
     args = parser.parse_args()
@@ -62,13 +78,19 @@ def train(Dataset, parser):
     net, optimizer = amp.initialize(net, optimizer, opt_level="O2", keep_batchnorm_fp32=True)
     sw = SummaryWriter(cfg.savepath)
 
-    loss_history = {'loss1': [], 'loss2': [], 'loss3': [], 'loss4': [], 'lossp': [], 'total': []}
+    loss_history = {'loss1': [], 'loss2': [], 'loss3': [], 'loss4': [], 'lossp': [], 'mae': [], 'fmeasure': []}
     global_step = 0
 
     for epoch in range(cfg.epoch):
         lr_factor = (1 - abs((epoch + 1) / (cfg.epoch + 1) * 2 - 1))
         optimizer.param_groups[0]['lr'] = lr_factor * cfg.lr * 0.1
         optimizer.param_groups[1]['lr'] = lr_factor * cfg.lr
+
+        total_mae = 0.0
+        total_fm = 0.0
+        total_samples = 0
+        epoch_loss_sum = {'loss1': 0.0, 'loss2': 0.0, 'loss3': 0.0, 'loss4': 0.0, 'lossp': 0.0}
+        total_batches = 0
 
         for step, (image, mask) in enumerate(loader):
             image, mask = image.cuda(), mask.cuda()
@@ -92,41 +114,78 @@ def train(Dataset, parser):
             with amp.scale_loss(total_loss, optimizer) as scale_loss:
                 scale_loss.backward()
             optimizer.step()
-            global_step += 1
+
+            # 计算指标
+            pred = torch.sigmoid(pose)
+            batch_mae = calculate_mae(pred, mask)
+            batch_fm = calculate_fmeasure(pred, mask)
+            total_mae += batch_mae * image.size(0)
+            total_fm += batch_fm * image.size(0)
+            total_samples += image.size(0)
+            total_batches += 1
 
             for k, v in zip(['loss1', 'loss2', 'loss3', 'loss4', 'lossp'], [loss1, loss2, loss3, loss4, lossp]):
-                sw.add_scalar(k, v.item(), global_step)
-                loss_history[k].append(v.item())
-            #loss_history['total'].append(total_loss.item())
+                epoch_loss_sum[k] += v.item()
+
             sw.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step)
+            global_step += 1
 
             if step % 10 == 0:
                 print(f"{datetime.datetime.now()} | step:{global_step}/{epoch + 1}/{cfg.epoch} | lr={optimizer.param_groups[0]['lr']:.6f} | " +
                       f"loss1={loss1.item():.6f} | loss2={loss2.item():.6f} | loss3={loss3.item():.6f} | loss4={loss4.item():.6f} | lossp={lossp.item():.6f}")
 
+        # 记录每个epoch的平均loss
+        for k in ['loss1', 'loss2', 'loss3', 'loss4', 'lossp']:
+            avg_loss = epoch_loss_sum[k] / total_batches
+            loss_history[k].append(avg_loss)
+            sw.add_scalar(k, avg_loss, epoch + 1)
+
+        # 记录epoch指标
+        epoch_mae = total_mae / total_samples
+        epoch_fm = total_fm / total_samples
+        loss_history['mae'].append(epoch_mae)
+        loss_history['fmeasure'].append(epoch_fm)
+        sw.add_scalar('MAE', epoch_mae, epoch + 1)
+        sw.add_scalar('F-measure', epoch_fm, epoch + 1)
+
         torch.save(net.state_dict(), f"{cfg.savepath}/{_MODEL_}{epoch + 1}")
 
-    # ======== 绘图：按 epoch 聚合 loss ========
-    epoch_loss_history = {k: [] for k in loss_history.keys()}
-    steps_per_epoch = len(loader)
-
-    for k, v in loss_history.items():
-        for i in range(0, len(v), steps_per_epoch):
-            epoch_loss = np.mean(v[i:i + steps_per_epoch])
-            epoch_loss_history[k].append(epoch_loss)
-
+    # ======== 绘图部分 ========
     epochs = range(1, cfg.epoch + 1)
-    for k, v in epoch_loss_history.items():
-         if k != 'total':
-            plt.plot(epochs, v, label=k)
+
+    # 绘制Loss曲线
+    plt.figure(figsize=(10, 6))
+    for k in ['loss1', 'loss2', 'loss3', 'loss4', 'lossp']:
+        plt.plot(epochs, loss_history[k], label=k)
     plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.ylabel("Loss Value")
+    plt.title("Training Loss Curves")
     plt.legend()
-    plt.title("Loss Curves")
-    plt.savefig("result/loss_plot.png")
+    plt.grid(True)
+    plt.savefig("result/loss_curves.png")
     plt.close()
 
-# ======== 启动入口 ========
+    # 绘制MAE曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, loss_history['mae'], 'b-', label='MAE')
+    plt.xlabel("Epoch")
+    plt.ylabel("MAE Value")
+    plt.title("Mean Absolute Error Curve")
+    plt.grid(True)
+    plt.savefig("result/mae_curve.png")
+    plt.close()
+
+    # 绘制F-measure曲线
+    plt.figure(figsize=(10, 6))
+    plt.plot(epochs, loss_history['fmeasure'], 'r-', label='F-measure')
+    plt.xlabel("Epoch")
+    plt.ylabel("F-measure Value")
+    plt.title("F-measure Curve")
+    plt.grid(True)
+    plt.savefig("result/fmeasure_curve.png")
+    plt.close()
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default='ICON-R')
@@ -135,7 +194,7 @@ if __name__ == '__main__':
     parser.add_argument("--momen", type=float, default=0.9)
     parser.add_argument("--decay", type=float, default=1e-4)
     parser.add_argument("--batchsize", type=int, default=14)
-    parser.add_argument("--epoch", type=int, default=20)
+    parser.add_argument("--epoch", type=int, default=60)
     parser.add_argument("--loss", default='CPR')
     parser.add_argument("--savepath", default='../checkpoint/ICON/ICON-R')
     parser.add_argument("--valid", type=bool, default=True)
