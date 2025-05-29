@@ -1,8 +1,4 @@
-**/*.jpg
 **/*.tar
 **/*.pth
-**/*.png
 **/*.caffemodel
 **/*.solverstate
-!**/00[0-2][0-9].jpg
-!**/00[0-2][0-9].png
