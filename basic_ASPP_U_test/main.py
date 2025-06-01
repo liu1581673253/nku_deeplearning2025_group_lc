@@ -12,40 +12,47 @@ from dataset import SaliencyDataset
 from model import SaliencyModel
 from utils import compute_max_f, compute_mae, compute_mse
 
+
+# --------------------------
+# IoU Loss 实现
+# --------------------------
+def iou_loss(preds, targets, smooth=1e-6):
+    preds = preds.view(-1)
+    targets = targets.view(-1)
+    intersection = (preds * targets).sum()
+    union = preds.sum() + targets.sum() - intersection
+    return 1 - (intersection + smooth) / (union + smooth)
+
+
 def save_predictions(model, dataloader, device, output_dir, original_image_dir):
     os.makedirs(output_dir, exist_ok=True)
     model.eval()
     with torch.no_grad():
         for batch_idx, (images, masks) in enumerate(dataloader):
             images = images.to(device)
-            preds = model(images)  # [B,1,H,W]
-
-            preds_np = preds.squeeze(1).cpu().numpy()  # [B,H,W]
+            preds = model(images)
+            preds_np = preds.squeeze(1).cpu().numpy()
 
             for i in range(preds_np.shape[0]):
-                # Subset索引映射到原始dataset索引
                 dataset_idx = dataloader.dataset.indices[batch_idx * dataloader.batch_size + i]
                 base_name = os.path.splitext(dataloader.dataset.dataset.image_filenames[dataset_idx])[0]
-
-                # 读取原始图尺寸
                 orig_img_path = os.path.join(original_image_dir, base_name + ".jpg")
                 orig_img = Image.open(orig_img_path)
-                orig_size = orig_img.size  # (width, height)
+                orig_size = orig_img.size
 
-                # 预测resize到原始尺寸
                 pred_img = preds_np[i]
                 pred_img_pil = Image.fromarray((pred_img * 255).astype('uint8'))
                 pred_img_pil = pred_img_pil.resize(orig_size, Image.BILINEAR)
 
-                # 保存结果
                 save_path = os.path.join(output_dir, base_name + ".png")
                 pred_img_pil.save(save_path)
 
     print(f"预测结果已保存到 {output_dir}")
 
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    print(device)
     image_dir = "./dataset/images"
     mask_dir = "./dataset/masks"
 
@@ -62,8 +69,8 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
-    model = SaliencyModel(pretrained=True).to(device)
-    criterion = nn.BCELoss()
+    model = SaliencyModel().to(device)
+    bce_loss = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
     train_losses, test_losses = [], []
@@ -76,12 +83,14 @@ def main():
         for images, masks in train_loader:
             images, masks = images.to(device), masks.to(device)
             preds = model(images)
-            loss = criterion(preds, masks)
 
+            bce = bce_loss(preds, masks)
+            iou = iou_loss(preds, masks)
+            # loss = 0.7 * bce + 0.3 * iou  # BCE + IoU Loss
+            loss=bce
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             epoch_loss += loss.item()
 
         train_losses.append(epoch_loss / len(train_loader))
@@ -93,9 +102,12 @@ def main():
             for images, masks in test_loader:
                 images, masks = images.to(device), masks.to(device)
                 preds = model(images)
-                loss = criterion(preds, masks)
-                test_loss += loss.item()
 
+                bce = bce_loss(preds, masks)
+                iou = iou_loss(preds, masks)
+                loss = bce + iou  # 测试阶段直接相加
+
+                test_loss += loss.item()
                 all_preds.append(preds.cpu())
                 all_masks.append(masks.cpu())
 
@@ -109,15 +121,16 @@ def main():
         maxf_scores.append(maxf)
         mae_scores.append(mae)
 
-        print(f"Epoch {epoch}: Train Loss={train_losses[-1]:.4f}, Test Loss={test_losses[-1]:.4f}, MaxF={maxf:.4f}, MAE={mae:.4f}")
+        print(
+            f"Epoch {epoch}: Train Loss={train_losses[-1]:.4f}, Test Loss={test_losses[-1]:.4f}, MaxF={maxf:.4f}, MAE={mae:.4f}")
 
         if maxf > best_maxf:
             best_maxf = maxf
             torch.save(model.state_dict(), "best_saliency_model.pth")
             print(f"保存最佳模型，Epoch {epoch}, MaxF={maxf:.4f}")
 
-    # 绘制Loss, MaxF, MAE曲线
-    plt.figure(figsize=(10,6))
+    # 绘图
+    plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label='Train Loss')
     plt.plot(test_losses, label='Test Loss')
     plt.plot(maxf_scores, label='MaxF')
@@ -130,9 +143,9 @@ def main():
     plt.savefig("training_curve.png")
     plt.show()
 
-    # 加载最佳模型，保存测试集预测结果
     model.load_state_dict(torch.load("best_saliency_model.pth", map_location=device))
     save_predictions(model, test_loader, device, output_dir="./predictions", original_image_dir=image_dir)
+
 
 if __name__ == "__main__":
     main()

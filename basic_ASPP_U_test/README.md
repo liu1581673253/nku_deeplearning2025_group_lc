@@ -2,5 +2,5 @@
 
 将所有1000数据集图片放到dataset下，运行main即可运行此项目
 
-Epoch 17: Train Loss=0.0539, Test Loss=0.2592, MaxF=0.8623, MAE=0.0749
-保存最佳模型，Epoch 17, MaxF=0.8623
+Epoch 15: Train Loss=0.0463, Test Loss=0.3740, MaxF=0.8981, MAE=0.0544
+保存最佳模型，Epoch 15, MaxF=0.8981
