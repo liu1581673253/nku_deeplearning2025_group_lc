@@ -31,14 +31,14 @@ def hybrid_loss(preds, targets, bce_fn):
 
 # 简易边缘标签生成
 def get_edge_label(mask):
-    kernel = torch.ones((1, 1, 3, 3), device=mask.device)
-    pad = 1
-    eroded = F.conv2d(mask, kernel, padding=pad)
-    eroded = (eroded == 9).float()
-    edge = mask - eroded
-    edge = edge.clamp(min=0)
-    return edge
-
+    # 水平/垂直方向梯度
+    kernel_x = torch.tensor([[[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]]], device=mask.device).float()
+    kernel_y = kernel_x.transpose(2, 3)
+    
+    grad_x = F.conv2d(mask, kernel_x, padding=1)
+    grad_y = F.conv2d(mask, kernel_y, padding=1)
+    edge = torch.sqrt(grad_x**2 + grad_y**2)
+    return (edge > 0.1).float()
 
 def save_predictions(model, dataloader, device, output_dir, original_image_dir):
     os.makedirs(output_dir, exist_ok=True)
@@ -89,11 +89,11 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
     model = SaliencyModel(pretrained=True).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = optim.Adam(model.parameters(), lr=5e-5)
     bce_fn = nn.BCELoss()
 
-    epochs = 30
-    edge_loss_weight = 0.5  # λ 边缘损失权重
+    epochs = 50
+    edge_loss_weight = 0.6  # λ 边缘损失权重
 
     train_losses = []
     test_mae_list = []

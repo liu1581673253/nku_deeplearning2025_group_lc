@@ -2,6 +2,24 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
 
+# 轻量级SE模块
+class SEBlock(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)  
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
 # 定义 ASPP 模块
 class ASPP(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -54,7 +72,7 @@ class ASPP(nn.Module):
 
         return out
 
-# 显著性模型主结构（增加边缘输出）
+# 显著性模型主结构
 class SaliencyModel(nn.Module):
     def __init__(self, pretrained=True):
         super(SaliencyModel, self).__init__()
@@ -67,6 +85,13 @@ class SaliencyModel(nn.Module):
         self.layer2 = backbone.layer2
         self.layer3 = backbone.layer3
         self.layer4 = backbone.layer4
+        
+        # 在ResNet的每个残差块后添加SE模块
+        self.se1 = SEBlock(64)   # 对应conv1输出
+        self.se2 = SEBlock(64)   # 对应layer1输出
+        self.se3 = SEBlock(128)  # 对应layer2输出
+        self.se4 = SEBlock(256)  # 对应layer3输出
+        self.se5 = SEBlock(512)  # 对应layer4输出
 
         self.aspp = ASPP(in_channels=512, out_channels=256)
 
@@ -92,14 +117,26 @@ class SaliencyModel(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
+        # 编码器部分
         x1 = self.conv1(x)
+        x1 = self.se1(x1)  # 添加SE
+        
         x2 = self.layer1(self.maxpool(x1))
+        x2 = self.se2(x2)  # 添加SE
+        
         x3 = self.layer2(x2)
+        x3 = self.se3(x3)  # 添加SE
+        
         x4 = self.layer3(x3)
+        x4 = self.se4(x4)  # 添加SE
+        
         x5 = self.layer4(x4)
+        x5 = self.se5(x5)  # 添加SE
 
+        # ASPP模块
         x5_aspp = self.aspp(x5)
 
+        # 解码器部分
         d4 = self.relu(self.up4(x5_aspp))
         d4 = torch.cat([d4, x4], dim=1)
         d4 = self.relu(self.conv_up4(d4))
@@ -119,6 +156,7 @@ class SaliencyModel(nn.Module):
         d0 = self.relu(self.up0(d1))
         d0 = self.relu(self.conv_up0(d0))
 
+        # 输出头
         saliency_out = self.final_conv(d0)
         saliency_out = self.sigmoid(saliency_out)
 
