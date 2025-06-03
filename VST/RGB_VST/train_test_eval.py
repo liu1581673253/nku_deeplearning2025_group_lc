@@ -27,7 +27,7 @@ if __name__ == "__main__":
     # test
     parser.add_argument('--Testing', default=False, type=bool, help='Testing or not')
     parser.add_argument('--save_test_path_root', default='preds/', type=str, help='save saliency maps path')
-    parser.add_argument('--test_paths', type=str, default='DUTS/DUTS-TE+ECSSD+HKU-IS+PASCAL-S+DUT-O+BSD')
+    parser.add_argument('--test_paths', type=str, default='DUTS/DUTS-TE')
 
     # evaluation
     parser.add_argument('--Evaluation', default=False, type=bool, help='Evaluation or not')
