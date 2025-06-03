@@ -26,7 +26,7 @@ def dice_loss(preds, targets, smooth=1e-6):
 def hybrid_loss(preds, targets, bce_fn):
     bce = bce_fn(preds, targets)
     dice = dice_loss(preds, targets)
-    return bce + dice
+    return bce +dice
 
 
 # 简易边缘标签生成
@@ -90,10 +90,11 @@ def main():
 
     model = SaliencyModel(pretrained=True).to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-4)
     bce_fn = nn.BCELoss()
 
     epochs = 30
-    edge_loss_weight = 0.5  # λ 边缘损失权重
+    edge_loss_weight = 0.6  # λ 边缘损失权重
 
     train_losses = []
     test_mae_list = []

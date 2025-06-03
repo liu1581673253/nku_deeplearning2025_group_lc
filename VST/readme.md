@@ -16,5 +16,11 @@
 
 我们使用下面的指令来复现：
 cd VST
+
+cd RGB_VST
+
 python train_test_eval.py --Training True --Testing True --Evaluation True --epochs 200 --train_steps 6000
 
+最终复现的结果为
+Average maxF: 0.9111
+Average MAE: 0.0392
