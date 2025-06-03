@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
+from agent_attention import AgentAttention
 
 # 轻量级SE模块
 class SEBlock(nn.Module):
@@ -13,64 +14,12 @@ class SEBlock(nn.Module):
             nn.Linear(channel // reduction, channel),
             nn.Sigmoid()
         )
-    
+
     def forward(self, x):
         b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)  
+        y = self.avg_pool(x).view(b, c)
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
-
-# 定义 ASPP 模块
-class ASPP(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ASPP, self).__init__()
-
-        self.atrous_block1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, padding=0, dilation=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block6 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=6, dilation=6),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block12 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=12, dilation=12),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block18 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=18, dilation=18),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.global_avg_pool = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Conv2d(in_channels, out_channels, 1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(out_channels * 5, out_channels, 1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-    def forward(self, x):
-        size = x.shape[2:]
-
-        out1 = self.atrous_block1(x)
-        out2 = self.atrous_block6(x)
-        out3 = self.atrous_block12(x)
-        out4 = self.atrous_block18(x)
-
-        out5 = self.global_avg_pool(x)
-        out5 = nn.functional.interpolate(out5, size=size, mode='bilinear', align_corners=False)
-
-        out = torch.cat([out1, out2, out3, out4, out5], dim=1)
-        out = self.conv1(out)
-
-        return out
 
 # 显著性模型主结构
 class SaliencyModel(nn.Module):
@@ -85,17 +34,18 @@ class SaliencyModel(nn.Module):
         self.layer2 = backbone.layer2
         self.layer3 = backbone.layer3
         self.layer4 = backbone.layer4
-        
+
         # 在ResNet的每个残差块后添加SE模块
-        self.se1 = SEBlock(64)   # 对应conv1输出
-        self.se2 = SEBlock(64)   # 对应layer1输出
+        self.se1 = SEBlock(64)  # 对应conv1输出
+        self.se2 = SEBlock(64)  # 对应layer1输出
         self.se3 = SEBlock(128)  # 对应layer2输出
         self.se4 = SEBlock(256)  # 对应layer3输出
         self.se5 = SEBlock(512)  # 对应layer4输出
 
-        self.aspp = ASPP(in_channels=512, out_channels=256)
+        # 添加AgentAttention模块
+        self.agent_attn = AgentAttention(dim=512, window_size=[7, 7], num_heads=8, agent_num=49)
 
-        self.up4 = nn.ConvTranspose2d(256, 256, 4, 2, 1)
+        self.up4 = nn.ConvTranspose2d(512, 256, 4, 2, 1)  # 修改输入通道为512
         self.conv_up4 = nn.Conv2d(256 + 256, 256, 3, 1, 1)
 
         self.up3 = nn.ConvTranspose2d(256, 128, 4, 2, 1)
@@ -111,7 +61,7 @@ class SaliencyModel(nn.Module):
         self.conv_up0 = nn.Conv2d(32, 16, 3, 1, 1)
 
         self.final_conv = nn.Conv2d(16, 1, 1)  # 显著图输出
-        self.edge_conv = nn.Conv2d(16, 1, 1)   # 边缘图输出
+        self.edge_conv = nn.Conv2d(16, 1, 1)  # 边缘图输出
 
         self.sigmoid = nn.Sigmoid()
         self.relu = nn.ReLU(inplace=True)
@@ -120,24 +70,24 @@ class SaliencyModel(nn.Module):
         # 编码器部分
         x1 = self.conv1(x)
         x1 = self.se1(x1)  # 添加SE
-        
+
         x2 = self.layer1(self.maxpool(x1))
         x2 = self.se2(x2)  # 添加SE
-        
+
         x3 = self.layer2(x2)
         x3 = self.se3(x3)  # 添加SE
-        
+
         x4 = self.layer3(x3)
         x4 = self.se4(x4)  # 添加SE
-        
+
         x5 = self.layer4(x4)
         x5 = self.se5(x5)  # 添加SE
 
-        # ASPP模块
-        x5_aspp = self.aspp(x5)
+        # 使用AgentAttention替代ASPP
+        x5_attn = self.agent_attn(x5)
 
         # 解码器部分
-        d4 = self.relu(self.up4(x5_aspp))
+        d4 = self.relu(self.up4(x5_attn))  # 使用注意力后的特征
         d4 = torch.cat([d4, x4], dim=1)
         d4 = self.relu(self.conv_up4(d4))
 

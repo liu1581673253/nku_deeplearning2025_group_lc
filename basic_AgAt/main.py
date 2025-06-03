@@ -34,7 +34,7 @@ def get_edge_label(mask):
     # 水平/垂直方向梯度
     kernel_x = torch.tensor([[[[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]]]], device=mask.device).float()
     kernel_y = kernel_x.transpose(2, 3)
-    
+
     grad_x = F.conv2d(mask, kernel_x, padding=1)
     grad_y = F.conv2d(mask, kernel_y, padding=1)
     edge = torch.sqrt(grad_x**2 + grad_y**2)
@@ -89,7 +89,7 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
     model = SaliencyModel(pretrained=True).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=5e-5)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     bce_fn = nn.BCELoss()
 
     epochs = 50

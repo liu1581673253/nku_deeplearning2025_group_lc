@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # 添加必要的导入
 from torchvision.models import resnet18, ResNet18_Weights
 
 # 轻量级SE模块
@@ -20,57 +21,37 @@ class SEBlock(nn.Module):
         y = self.fc(y).view(b, c, 1, 1)
         return x * y.expand_as(x)
 
-# 定义 ASPP 模块
-class ASPP(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ASPP, self).__init__()
-
-        self.atrous_block1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 1, padding=0, dilation=1),
+# 金字塔池化模块 (PPM)
+class PPM(nn.Module):
+    def __init__(self, in_channels, out_channels, bin_sizes=[1, 2, 3, 6]):
+        super(PPM, self).__init__()
+        self.stages = nn.ModuleList([
+            self._make_stage(in_channels, out_channels, size)
+            for size in bin_sizes
+        ])
+        self.fuse = nn.Sequential(
+            nn.Conv2d(in_channels + len(bin_sizes) * out_channels, out_channels, 3, padding=1),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block6 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=6, dilation=6),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block12 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=12, dilation=12),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.atrous_block18 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, 3, padding=18, dilation=18),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.global_avg_pool = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.ReLU(inplace=True)
+        )
+    
+    def _make_stage(self, in_channels, out_channels, bin_size):
+        return nn.Sequential(
+            nn.AdaptiveAvgPool2d(bin_size),
             nn.Conv2d(in_channels, out_channels, 1),
             nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(out_channels * 5, out_channels, 1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True))
-
+            nn.ReLU(inplace=True)
+        )
+    
     def forward(self, x):
-        size = x.shape[2:]
-
-        out1 = self.atrous_block1(x)
-        out2 = self.atrous_block6(x)
-        out3 = self.atrous_block12(x)
-        out4 = self.atrous_block18(x)
-
-        out5 = self.global_avg_pool(x)
-        out5 = nn.functional.interpolate(out5, size=size, mode='bilinear', align_corners=False)
-
-        out = torch.cat([out1, out2, out3, out4, out5], dim=1)
-        out = self.conv1(out)
-
-        return out
+        h, w = x.size()[2:]
+        pyramids = [x]
+        for stage in self.stages:
+            pyramid = stage(x)
+            pyramid = F.interpolate(pyramid, size=(h, w), mode='bilinear', align_corners=False)
+            pyramids.append(pyramid)
+        out = torch.cat(pyramids, dim=1)
+        return self.fuse(out)
 
 # 显著性模型主结构
 class SaliencyModel(nn.Module):
@@ -93,10 +74,11 @@ class SaliencyModel(nn.Module):
         self.se4 = SEBlock(256)  # 对应layer3输出
         self.se5 = SEBlock(512)  # 对应layer4输出
 
-        self.aspp = ASPP(in_channels=512, out_channels=256)
+        # 使用PPM模块替换ASPP
+        self.ppm = PPM(in_channels=512, out_channels=128)
 
-        self.up4 = nn.ConvTranspose2d(256, 256, 4, 2, 1)
-        self.conv_up4 = nn.Conv2d(256 + 256, 256, 3, 1, 1)
+        self.up4 = nn.ConvTranspose2d(128, 128, 4, 2, 1)
+        self.conv_up4 = nn.Conv2d(128 + 256, 256, 3, 1, 1)
 
         self.up3 = nn.ConvTranspose2d(256, 128, 4, 2, 1)
         self.conv_up3 = nn.Conv2d(128 + 128, 128, 3, 1, 1)
@@ -133,11 +115,11 @@ class SaliencyModel(nn.Module):
         x5 = self.layer4(x4)
         x5 = self.se5(x5)  # 添加SE
 
-        # ASPP模块
-        x5_aspp = self.aspp(x5)
+        # PPM模块
+        x5_ppm = self.ppm(x5)
 
         # 解码器部分
-        d4 = self.relu(self.up4(x5_aspp))
+        d4 = self.relu(self.up4(x5_ppm))
         d4 = torch.cat([d4, x4], dim=1)
         d4 = self.relu(self.conv_up4(d4))
 

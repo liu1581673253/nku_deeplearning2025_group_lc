@@ -89,7 +89,7 @@ def main():
     test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
 
     model = SaliencyModel(pretrained=True).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=5e-5)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
     bce_fn = nn.BCELoss()
 
     epochs = 50
@@ -158,14 +158,42 @@ def main():
     model.load_state_dict(torch.load(os.path.join(checkpoint_dir, "best_model.pth")))
     save_predictions(model, test_loader, device, "./outputs/pred", image_dir)
 
-    # 绘图
-    plt.figure()
-    plt.plot(range(1, epochs + 1), train_losses, label="Train Loss")
-    plt.plot(range(1, epochs + 1), test_mae_list, label="Test MAE")
-    plt.plot(range(1, epochs + 1), test_maxf_list, label="Test MaxF")
+    # 图1：训练损失曲线（单独一张图）
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(1, epochs + 1), train_losses, 'b-', linewidth=2, label="Train Loss")
     plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss Curve")
+    plt.grid(True, linestyle='--', alpha=0.6)
     plt.legend()
-    plt.title("Training Curve")
+    plt.tight_layout()
+    plt.savefig('training_loss.png')
+    plt.show()
+
+    # 图2：验证集指标（MAE和MaxF，单独一张图）
+    plt.figure(figsize=(8, 6))
+    plt.plot(range(1, epochs + 1), test_mae_list, 'r-', linewidth=2, label="Test MAE")
+    plt.plot(range(1, epochs + 1), test_maxf_list, 'g-', linewidth=2, label="Test MaxF")
+    
+    # 标记最佳点
+    best_maxf_idx = test_maxf_list.index(max(test_maxf_list))
+    best_mae_idx = test_mae_list.index(min(test_mae_list))
+    
+    plt.scatter(best_maxf_idx + 1, test_maxf_list[best_maxf_idx], 
+                s=100, c='green', marker='*', label=f'Best MaxF: {test_maxf_list[best_maxf_idx]:.4f}')
+    plt.scatter(best_mae_idx + 1, test_mae_list[best_mae_idx], 
+                s=100, c='red', marker='*', label=f'Best MAE: {test_mae_list[best_mae_idx]:.4f}')
+    
+    plt.axvline(x=best_epoch, color='gray', linestyle=':', alpha=0.7)
+    plt.text(best_epoch + 0.5, min(test_mae_list) + 0.01, f'Best Epoch: {best_epoch}', fontsize=10)
+    
+    plt.xlabel("Epoch")
+    plt.ylabel("Metric Value")
+    plt.title("Validation Metrics (MAE and MaxF)")
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig('validation_metrics.png')
     plt.show()
 
 
